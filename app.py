@@ -101,14 +101,16 @@ for message in st.session_state.messages:
 user_input = st.chat_input("输入查询指令，例如：提取本文档中关于坏账准备的计提标准...")
 
 if user_input:
+    # 1. 记录并显示用户消息
     st.session_state.messages.append({"role": "user", "content": user_input})
     st.chat_message("user", avatar=avatars["user"]).write(user_input)
     
     with st.spinner("⚡ 引擎检索中，请稍候..."):
+        # 2. 判断知识库是否已加载
         if "vector_store" in st.session_state:
+            # --- 所有的检索逻辑都必须缩进在这个 if 里面 ---
             prompt = ChatPromptTemplate.from_template("""
-            你是一个资深的审计专家和智能分析助手。请严格根据以下【参考文档】的内容回答问题。
-            你的回答需要严谨、专业。如果文档中没有相关信息，请直接回答“当前知识库中未检索到相关数据”，绝对不要自己编造。
+            你是一个资深的审计专家。请严格根据以下【参考文档】回答问题。
             
             【参考文档】：
             {context}
@@ -117,26 +119,32 @@ if user_input:
             {input}
             """)
             
+            # 正确的定义顺序：先定义 document_chain 和 retriever，再合成 retrieval_chain
             document_chain = create_stuff_documents_chain(llm, prompt)
             retriever = st.session_state.vector_store.as_retriever(search_kwargs={"k": 10})
+            
+            # 这里调用就不会报 NameError 了，因为 retriever 就在上面一行
             retrieval_chain = create_retrieval_chain(retriever, document_chain)
             
             response = retrieval_chain.invoke({"input": user_input})
             ai_answer = response["answer"]
-            source_docs = response["context"] 
             
+            # 溯源定位逻辑
             source_pages = set() 
-            for doc in source_docs:
+            for doc in response["context"]:
                 if "page" in doc.metadata:
                     source_pages.add(str(doc.metadata["page"] + 1))
             
             if source_pages:
                 sorted_pages = sorted(list(source_pages), key=int)
                 ai_answer += f"\n\n> 🔍 **溯源定位：** 参考底稿第 {', '.join(sorted_pages)} 页"
-
+        
         else:
+            # --- 如果没有知识库，走通用回答逻辑 ---
             response = llm.invoke(user_input)
             ai_answer = response.content
+            ai_answer += "\n\n⚠️ *提示：当前未加载本地知识库，回答基于通用模型知识。*"
 
-        st.session_state.messages.append({"role": "assistant", "content": ai_answer})
-        st.chat_message("assistant", avatar=avatars["assistant"]).write(ai_answer)
+    # 3. 统一显示并保存 AI 回答
+    st.session_state.messages.append({"role": "assistant", "content": ai_answer})
+    st.chat_message("assistant", avatar=avatars["assistant"]).write(ai_answer)
